@@ -1,0 +1,110 @@
+name: Deploy Deployment Notifier
+
+on:
+  workflow_dispatch:
+    inputs:
+      app:
+        description: "Affected System/Application"
+        required: true
+        type: choice
+        options:
+          - Alarm Manager
+          - Altaia
+          - Altice Agora
+          - Analytics
+          - FF1
+          - FFWK
+          - IAM
+          - NOSSIS Common
+          - NetQ
+          - Netwin
+          - Nokia AMS
+          - SIGO WO
+          - SIGO TTK
+          - SIGO WOv15
+      env:
+        description: "Environment"
+        required: true
+        type: choice
+        options:
+          - Production
+          - Test
+          - Pre-Production
+      date:
+        description: "Deployment Date (YYYY-MM-DD)"
+        required: true
+        type: string
+      time:
+        description: "Deployment Time (HH:MM, e.g., 17:00)"
+        required: true
+        type: string
+      downtime:
+        description: "Expected Downtime (e.g., 30 minutes)"
+        required: true
+        type: string
+      release:
+        description: "Vendor Release Notes / Version"
+        required: false
+        type: string
+        default: "N/A"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Prepare public folder
+        run: |
+          mkdir -p public
+          cp -r deployment-notifier/* public/
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./public
+
+      - name: Show Deployment Notifier URL
+        run: |
+          APP="${{ github.event.inputs.app }}"
+          ENV="${{ github.event.inputs.env }}"
+          DATE="${{ github.event.inputs.date }}"
+          TIME="${{ github.event.inputs.time }}"
+          DOWNTIME="${{ github.event.inputs.downtime }}"
+          RELEASE="${{ github.event.inputs.release }}"
+      
+          # URL encode function
+          urlencode() {
+            python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$1"
+          }
+      
+          APP_ENC=$(urlencode "$APP")
+          ENV_ENC=$(urlencode "$ENV")
+          DATE_ENC=$(urlencode "$DATE")
+          TIME_ENC=$(urlencode "$TIME")
+          DOWNTIME_ENC=$(urlencode "$DOWNTIME")
+          RELEASE_ENC=$(urlencode "$RELEASE")
+      
+          USERNAME=${GITHUB_REPOSITORY_OWNER}
+          REPO=$(basename $GITHUB_REPOSITORY)
+      
+          PREFILL_URL="https://${USERNAME}.github.io/${REPO}/?app=${APP_ENC}&env=${ENV_ENC}&date=${DATE_ENC}&time=${TIME_ENC}&downtime=${DOWNTIME_ENC}&release=${RELEASE_ENC}"
+      
+          echo "### deploy summary" >> $GITHUB_STEP_SUMMARY
+          echo "Deployment Notifier" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "App: $APP" >> $GITHUB_STEP_SUMMARY
+          echo "Environment: $ENV" >> $GITHUB_STEP_SUMMARY
+          echo "Date: $DATE" >> $GITHUB_STEP_SUMMARY
+          echo "Time: $TIME" >> $GITHUB_STEP_SUMMARY
+          echo "Downtime: $DOWNTIME" >> $GITHUB_STEP_SUMMARY
+          echo "Release: $RELEASE" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "[Open Pre-Filled Form]($PREFILL_URL)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Note: Excel files must exist at deployment-notifier/users/<App>.xlsx (e.g., users/$APP.xlsx)." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Job summary generated at run-time" >> $GITHUB_STEP_SUMMARY
