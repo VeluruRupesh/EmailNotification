@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Deployment Notification Generator</title>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<style>
+  body { font-family: Arial, sans-serif; padding: 20px; max-width: 750px; margin: auto; }
+  label, select, input { display: block; margin: 10px 0; width: 100%; padding: 8px; }
+  button { padding: 10px 15px; margin-top: 15px; cursor: pointer; }
+  #summary, #output { white-space: pre-wrap; background: #f4f4f4; padding: 15px; margin-top: 20px; border: 1px solid #ccc; }
+  .inline-group { display: flex; gap: 10px; }
+  .inline-group select, .inline-group input { flex: 1; }
+  input::placeholder { color: #999; }
+  .disabled { background: #eee; }
+</style>
+</head>
+<body>
+
+<h2>Deployment Notification Generator</h2>
+
+<label for="app">Affected System/Application:</label>
+<select id="app" onchange="loadEmails(prefillEmailPreview)">
+  <option value="">-- Select Application --</option>
+</select>
+<p id="emailCount"></p>
+
+<label for="env">Environment:</label>
+<select id="env">
+  <option value="">-- Select Environment --</option>
+</select>
+
+<label for="date">Deployment Date:</label>
+<input type="date" id="date">
+
+<label for="time">Deployment Time:</label>
+<input type="time" id="time">
+
+<label for="downtime">Expected Downtime Duration:</label>
+<div class="inline-group">
+  <select id="downtime" onchange="toggleCustomDowntime()">
+    <option value="">-- Select Duration --</option>
+  </select>
+  <input type="text" id="customDowntime" placeholder="Enter downtime" disabled class="disabled">
+</div>
+
+<label for="release">Vendor Release Notes / Version:</label>
+<input type="text" id="release" placeholder="Anything can be entered here">
+
+<button onclick="generateEmail()">Generate Email</button>
+
+<div id="summary"></div>
+<div id="output"></div>
+
+<script>
+let emailList = [];
+
+// =====================
+// Populate dropdowns
+// =====================
+const apps = ["Alarm Manager","Altaia","Altice Agora","Analytics","FF1","FFWK","IAM","NOSSIS Common","NetQ","Netwin","Nokia AMS","SIGO WO","SIGO TTK","SIGO WOv15"];
+const envs = ["Production","Test","Pre-Production"];
+const downtimes = ["5 minutes","10 minutes","15 minutes","30 minutes","45 minutes","1 hour","2 hours","Other"];
+
+const appSelect = document.getElementById("app");
+apps.forEach(a => { const opt = document.createElement("option"); opt.value = a; opt.textContent = a; appSelect.appendChild(opt); });
+
+const envSelect = document.getElementById("env");
+envs.forEach(e => { const opt = document.createElement("option"); opt.value = e; opt.textContent = e; envSelect.appendChild(opt); });
+
+const downtimeSelect = document.getElementById("downtime");
+downtimes.forEach(d => { const opt = document.createElement("option"); opt.value = d; opt.textContent = d; downtimeSelect.appendChild(opt); });
+
+// =====================
+// Email validation
+// =====================
+function validateEmail(email) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email); }
+
+// =====================
+// Load emails from Excel
+// =====================
+async function loadEmails(callback) {
+  const app = document.getElementById("app").value.trim();
+  emailList = [];
+  document.getElementById("emailCount").textContent = "";
+  if (!app) { if(callback) callback(); return; }
+
+  try {
+    const fileName = `users/${app.toLowerCase()}.xlsx`;
+    const response = await fetch(fileName);
+    if (!response.ok) { alert(`No email list found for "${app}". Expected: ${fileName}`); if(callback) callback(); return; }
+
+    const data = await response.arrayBuffer();
+    const workbook = XLSX.read(data, { type: "array" });
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+
+    emailList = rows.map(row => row.Email || row.email || row.EMAIL).filter(e => e && validateEmail(e));
+    document.getElementById("emailCount").textContent = `${emailList.length} email(s) will be notified.`;
+
+    if(callback) callback();
+  } catch(err) { console.error(err); alert("Error loading email list."); if(callback) callback(); }
+}
+
+// =====================
+// Downtime toggle
+// =====================
+function toggleCustomDowntime() {
+  const downtime = downtimeSelect.value;
+  const custom = document.getElementById("customDowntime");
+  if(downtime === "Other") { custom.disabled=false; custom.classList.remove("disabled"); }
+  else { custom.disabled=true; custom.value=""; custom.classList.add("disabled"); }
+}
+
+// =====================
+// Utilities
+// =====================
+function toTitleCase(str) { return str.replace(/\w\S*/g, txt => txt.charAt(0).toUpperCase() + txt.slice(1).toLowerCase()); }
+function parseDowntime(downtime) {
+  if(!downtime) return 0;
+  const cleaned = downtime.replace(/\s+/g,'').toLowerCase();
+  if (cleaned.includes('hour') || cleaned.includes('h')) return parseFloat(cleaned)*60;
+  if (cleaned.includes('minute') || cleaned.includes('min') || cleaned.endsWith('m')) return parseFloat(cleaned);
+  return 0;
+}
+
+// =====================
+// Generate summary & email preview
+// =====================
+function generateEmail() {
+  const appRaw = document.getElementById("app").value.trim();
+  const capitalizedApp = toTitleCase(appRaw);
+  const env = document.getElementById("env").value.trim();
+  const date = document.getElementById("date").value;
+  const time = document.getElementById("time").value;
+  const downtime = document.getElementById("downtime").value === "Other" 
+                   ? document.getElementById("customDowntime").value.trim() 
+                   : document.getElementById("downtime").value.trim();
+  const release = document.getElementById("release").value.trim() || "N/A";
+
+  if (!capitalizedApp || !env || !date || !time || !downtime) {
+    alert("Please fill all required fields.");
+    return;
+  }
+  if(emailList.length === 0) {
+    alert("Email list is empty. Make sure the Excel file exists for this app.");
+    return;
+  }
+
+  const startDateTime = new Date(`${date}T${time}`);
+  const downtimeMinutes = parseDowntime(downtime);
+  const endDateTime = new Date(startDateTime.getTime() + downtimeMinutes*60000);
+
+  const formattedDate = startDateTime.toLocaleDateString('de-DE',{day:'2-digit',month:'2-digit',year:'numeric'});
+  const formattedStart = startDateTime.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',hour12:false}) + " CEST";
+  const formattedEnd = endDateTime.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',hour12:false}) + " CEST";
+
+  // =====================
+  // Email preview
+  // =====================
+  const subject = `[REMINDER] Software Installation on ${formattedDate} – ${env}`;
+  const bodyText = `Dear Sir or Madam,
+
+We would like to inform you about an upcoming software installation as part of our regular maintenance and development measures:
+
+Affected Systems/Applications:
+• ${capitalizedApp}
+
+Environment:
+• ${env}
+
+Scheduled Installation Period:
+• ${formattedDate}, from ${formattedStart} until ${formattedEnd}
+
+Expected Downtime:
+• ${downtime}
+
+Vendor Release Notes:
+• ${release}
+
+Please note that you will only be able to use ${capitalizedApp} from ${formattedEnd} on ${formattedDate}.
+We will, of course, make every effort to minimize any potential disruptions.
+
+Thank you for your understanding.
+Best regards,
+OSS DevOps Team.`;
+
+  const mailto = `mailto:?bcc=${encodeURIComponent(emailList.join(","))}&subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(bodyText)}`;
+
+  document.getElementById("output").innerHTML = `
+<b>Subject:</b> ${subject}<br><br>
+<b>Email Preview:</b><br><pre style="white-space: pre-wrap;">${bodyText}</pre><br>
+<b>Recipients:</b> ${emailList.length} (in BCC)<br><br>
+<button onclick="window.location.href='${mailto}'">Open in Outlook</button>`;
+}
+
+// =====================
+// Generate prefill link
+// =====================
+function generatePrefillLink() {
+  const params = new URLSearchParams();
+  params.set("app", document.getElementById("app").value);
+  params.set("env", document.getElementById("env").value);
+  params.set("date", document.getElementById("date").value);
+  params.set("time", document.getElementById("time").value);
+  const downtimeVal = document.getElementById("downtime").value === "Other" 
+                      ? document.getElementById("customDowntime").value 
+                      : document.getElementById("downtime").value;
+  params.set("downtime", downtimeVal);
+  params.set("release", document.getElementById("release").value);
+
+  return `${window.location.origin}${window.location.pathname}?${params.toString()}`;
+}
+
+// =====================
+// Auto-prefill from URL
+// =====================
+(function() {
+  const params = new URLSearchParams(window.location.search);
+
+  const appParam = params.get("app") ? decodeURIComponent(params.get("app")) : null;
+  const envParam = params.get("env") ? decodeURIComponent(params.get("env")) : null;
+  const dateParam = params.get("date") ? decodeURIComponent(params.get("date")) : null;
+  const timeParam = params.get("time") ? decodeURIComponent(params.get("time")) : null;
+  const downtimeParam = params.get("downtime") ? decodeURIComponent(params.get("downtime")) : null;
+  const releaseParam = params.get("release") ? decodeURIComponent(params.get("release")) : null;
+
+  const prefillForm = () => {
+    if(envParam) envSelect.value = envParam;
+    if(dateParam) document.getElementById("date").value = dateParam;
+    if(timeParam) document.getElementById("time").value = timeParam;
+    if(downtimeParam) {
+      if(downtimes.includes(downtimeParam)) { downtimeSelect.value = downtimeParam; toggleCustomDowntime(); }
+      else { downtimeSelect.value="Other"; toggleCustomDowntime(); document.getElementById("customDowntime").value=downtimeParam; }
+    }
+    if(releaseParam) document.getElementById("release").value = releaseParam;
+
+    generateEmail();
+  };
+
+  if(appParam) {
+    const matchApp = apps.find(a => a.toLowerCase()===appParam.toLowerCase());
+    if(matchApp) {
+      appSelect.value = matchApp;
+      loadEmails(prefillForm);
+    } else prefillForm();
+  } else prefillForm();
+})();
+
+function prefillEmailPreview() { generateEmail(); }
+</script>
+
+</body>
+</html>
+
